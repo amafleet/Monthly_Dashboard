@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Monthly Safety Performance Dashboard</title>
+
+  <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f5f6f7;
+      margin: 20px;
+    }
+
+    h1, h2 {
+      text-align: center;
+    }
+
+    .upload {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    .chart {
+      margin: 40px 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      margin-top: 20px;
+    }
+
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      font-size: 13px;
+    }
+
+    th {
+      background: #222;
+      color: white;
+    }
+
+    .subtotal {
+      background: #e9ecef;
+      font-weight: bold;
+    }
+  </style>
+</head>
+
+<body>
+
+<h1>📆 Monthly Safety Performance Dashboard</h1>
+
+<div class="upload">
+  <input type="file" id="fileInput" accept=".json">
+  <p>Upload monthly safety JSON file</p>
+</div>
+
+<div id="associateChart" class="chart"></div>
+<div id="metricChart" class="chart"></div>
+
+<h2>📋 Monthly Violation Details</h2>
+<div id="detailsTable"></div>
+
+<script>
+document.getElementById("fileInput").addEventListener("change", handleFile);
+
+/* =========================
+   Violation Rules
+========================= */
+function isViolation(review) {
+  return (
+    review === "None" ||
+    review === "Dispute Denied" ||
+    review === "Dispute Closed"
+  );
+}
+
+function reviewLabel(review) {
+  if (review === "Dispute Approved") {
+    return "No – Violation (Dispute Approved)";
+  }
+  return "Yes – Violation";
+}
+
+/* =========================
+   Helpers
+========================= */
+function getMonthLabel(dateStr) {
+  const d = new Date(dateStr);
+  return d.toLocaleString("default", { month: "long", year: "numeric" });
+}
+
+/* =========================
+   File Upload
+========================= */
+function handleFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const fileName = file.name;
+
+  const reader = new FileReader();
+  reader.onload = e => {
+    let data = JSON.parse(e.target.result);
+    if (!Array.isArray(data)) data = [data];
+    buildMonthlyDashboard(data, fileName);
+  };
+  reader.readAsText(file);
+}
+
+/* =========================
+   Build Dashboard
+========================= */
+function buildMonthlyDashboard(data, fileName) {
+  const associateCounts = {};
+  const metricCounts = {};
+  const detailMap = {};
+  const associateTotals = {};
+  let monthLabel = "Monthly View";
+
+  data.forEach(d => {
+    const associate = d["Delivery Associate"];
+    const metricType = d["Metric Type"];
+    const metricSub = d["Metric Subtype"];
+    const review = d["Review Details"] || "None";
+    const dateTime = d["Date Time (PDT/PST)"];
+
+    if (dateTime) {
+      monthLabel = getMonthLabel(dateTime);
+    }
+
+    const key = `${associate}|${metricType}|${metricSub}|${review}`;
+
+    if (isViolation(review)) {
+      associateCounts[associate] = (associateCounts[associate] || 0) + 1;
+      metricCounts[metricType] = (metricCounts[metricType] || 0) + 1;
+      associateTotals[associate] = (associateTotals[associate] || 0) + 1;
+    }
+
+    detailMap[key] = (detailMap[key] || 0) + 1;
+  });
+
+  buildAssociateHistogram(associateCounts, fileName);
+  buildMetricHistogram(metricCounts, fileName);
+  buildDetailsTable(detailMap, associateTotals);
+}
+
+/* =========================
+   Charts
+========================= */
+function buildAssociateHistogram(data, fileName) {
+  const sorted = Object.entries(data)
+    .sort((a, b) => b[1] - a[1]);
+
+  const names = sorted.map(d => d[0]);
+  const values = sorted.map(d => d[1]);
+
+  // Default color for all bars
+  const colors = Array(values.length).fill("steelblue");
+
+  Plotly.newPlot("associateChart", [{
+    x: names,
+    y: values,
+    type: "bar",
+    marker: { color: colors }
+  }], {
+    title: `Violation Count per Delivery Associate – ${fileName}`,
+    xaxis: {
+      tickangle: -45,
+      tickfont: { size: 10 },
+      automargin: true
+    },
+    yaxis: { title: "Violations" }
+  }, { responsive: true });
+}
+
+function buildMetricHistogram(data, fileName) {
+  const metrics = Object.keys(data).sort();
+  const values = metrics.map(m => data[m]);
+
+  Plotly.newPlot("metricChart", [{
+    x: metrics,
+    y: values,
+    type: "bar",
+    marker: { color: "steelblue" }
+  }], {
+    title: `Violation Count per Metric Type – ${fileName}`,
+    xaxis: {
+      tickangle: -30,
+      tickfont: { size: 11 },
+      automargin: true
+    },
+    yaxis: { title: "Violations" }
+  }, { responsive: true });
+}
+
+/* =========================
+   Details Table
+========================= */
+function buildDetailsTable(data, totals) {
+  const grouped = {};
+
+  Object.entries(data).forEach(([key, count]) => {
+    const [associate, metricType, metricSub, review] = key.split("|");
+    grouped[associate] = grouped[associate] || [];
+    grouped[associate].push({ metricType, metricSub, review, count });
+  });
+
+  const sortedAssociates = Object.keys(grouped)
+    .sort((a, b) => (totals[b] || 0) - (totals[a] || 0));
+
+  let html = `
+    <table>
+      <tr>
+        <th>Delivery Associate</th>
+        <th>Metric Type</th>
+        <th>Metric Subtype</th>
+        <th>Review Details</th>
+        <th>Total Violations</th>
+      </tr>`;
+
+  sortedAssociates.forEach(associate => {
+    grouped[associate].forEach(row => {
+      html += `
+        <tr>
+          <td>${associate}</td>
+          <td>${row.metricType}</td>
+          <td>${row.metricSub}</td>
+          <td>${reviewLabel(row.review)}</td>
+          <td>${isViolation(row.review) ? row.count : 0}</td>
+        </tr>`;
+    });
+
+    html += `
+      <tr class="subtotal">
+        <td colspan="4">Subtotal – ${associate}</td>
+        <td>${totals[associate] || 0}</td>
+      </tr>`;
+  });
+
+  html += "</table>";
+  document.getElementById("detailsTable").innerHTML = html;
+}
+</script>
+
+</body>
+</html>
